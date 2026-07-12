@@ -1,0 +1,66 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guias}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-guias_secret}
+    networks:
+      - guias-net
+
+  producer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: empresa-transportista-producer
+    ports:
+      - "8080:8080"
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-guias}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guias_secret}
+      EFS_PATH: /app/efs
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-tu-bucket-guias}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+    volumes:
+      - efs-data:/app/efs
+    depends_on:
+      - rabbitmq
+    networks:
+      - guias-net
+
+  consumer:
+    build:
+      context: ../../Exp3_S8_lisbeth_bilbao_grupo_2_consumer
+      dockerfile: Dockerfile
+    container_name: empresa-transportista-consumer
+    ports:
+      - "8081:8081"
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-guias}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guias_secret}
+      EFS_PATH: /app/efs
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-tu-bucket-guias}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      ORACLE_JDBC_URL: ${ORACLE_JDBC_URL}
+      ORACLE_USER: ${ORACLE_USER}
+      ORACLE_PASSWORD: ${ORACLE_PASSWORD}
+    volumes:
+      - efs-data:/app/efs
+    depends_on:
+      - rabbitmq
+    networks:
+      - guias-net
+
+networks:
+  guias-net:
+    driver: bridge
+
+volumes:
+  efs-data:

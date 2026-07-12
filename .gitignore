@@ -1,0 +1,19 @@
+# Build artifacts
+**/target/
+**/build/
+efs/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# Secretos locales
+**/.env
+**/.env.*
+**/claves*.txt
+**/claves_actividad*.txt
+**/postman/Semana8.postman_environment.json
+**/postman/Semana6.postman_environment.json

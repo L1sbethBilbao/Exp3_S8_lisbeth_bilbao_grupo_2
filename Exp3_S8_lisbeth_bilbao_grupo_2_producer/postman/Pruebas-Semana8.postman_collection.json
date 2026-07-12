@@ -1,0 +1,1361 @@
+{
+  "info": {
+    "_postman_id": "semana8-transportista-2026",
+    "name": "Semana 8 — RabbitMQ + API Gateway + Azure AD B2C",
+    "description": "# Empresa Transportista — Semana 8 (colección unificada)\n\nFlujo completo vía **AWS API Gateway** con **Azure AD B2C** y arquitectura **asíncrona RabbitMQ** (Producer encola → Consumer persiste en S3 + Oracle).\n\n## Configuración\n1. Importar environment **`Semana 8`** y seleccionarlo\n2. Completar `lector_username` / `lector_password` para Carpeta 3 (LECTOR)\n\n## Orden de ejecución (video / evaluación)\n1. **0.1** OAuth GESTOR → Get New Access Token → Use Token → Send\n2. **0.0 C** → **0.0 B** (diagnóstico Gateway)\n3. **Carpeta 1** flujo GESTOR (escrituras retornan **202 ENCOLADO**)\n4. **Carpeta 2** monitoreo RabbitMQ + DLQ (consumer :8081)\n5. Re-ejecutar consultas S3 en Carpeta 1.2 tras procesamiento consumer\n6. **0.2** + **Carpeta 3** usuario LECTOR\n7. **Carpeta 4** 401 sin token\n\n**Escrituras async:** generar-guia, subir, actualizar, mover y eliminar guías encolan en `guias.queue`. El consumer procesa y guarda en S3/Oracle. Errores van a `guias.dlq`.\n\n**Profesor:** usar **Access Token**, no ID Token.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token_gestor}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "0. Autenticación — Azure AD B2C",
+      "description": "## OAuth 2.0 Authorization Code (PKCE)\n\n### Orden\n1. **0.1** GESTOR (Gateway) → **Use Token** obligatorio antes de Send\n2. **0.0 C** → **0.0 B** → **0.0 A** (diagnóstico)\n3. **Carpeta 1** evaluación via `{{api_gateway_url}}` (escrituras async 202)\n4. **Carpeta 2** RabbitMQ / DLQ\n5. **0.2** LECTOR (después de Carpeta 1 + consumer, cuando existan guías en S3)\n\n**EC2 vs Gateway:** 0.1 y Carpeta 1 usan **API Gateway**. Solo **0.0 A** y Carpeta 4 prueban EC2 directo.\n\nRedirect URI Azure: `https://oauth.pstmn.io/v1/callback`",
+      "auth": {
+        "type": "noauth"
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (!pm.environment.name) {",
+              "    throw new Error('Selecciona el environment \"Semana 8\" (arriba a la derecha). Sin environment, password y client_secret llegan vacios.');",
+              "}",
+              "if (pm.environment.name !== 'Semana 8') {",
+              "    console.warn('Environment activo: ' + pm.environment.name + ' — se esperaba \"Semana 8\"');",
+              "}"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "0.1 Login GESTOR (OAuth 2.0 — Authorization Code)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "if (!pm.environment.name) {",
+                  "    throw new Error('Selecciona environment \"Semana 8\" arriba a la derecha.');",
+                  "}",
+                  "function getOAuthAccessToken() {",
+                  "    const oauth = pm.request.auth && pm.request.auth.oauth2;",
+                  "    if (!oauth) return '';",
+                  "    const entry = oauth.find(x => x.key === 'accessToken');",
+                  "    return (entry && entry.value) ? entry.value : '';",
+                  "}",
+                  "function getOAuthIdToken() {",
+                  "    const oauth = pm.request.auth && pm.request.auth.oauth2;",
+                  "    if (!oauth) return '';",
+                  "    const entry = oauth.find(x => x.key === 'idToken');",
+                  "    return (entry && entry.value) ? entry.value : '';",
+                  "}",
+                  "function syncOAuthAccessTokenToEnv() {",
+                  "    const access = getOAuthAccessToken();",
+                  "    const id = getOAuthIdToken();",
+                  "    if (access) {",
+                  "        pm.environment.set('access_token_gestor', access);",
+                  "        console.log('access_token_gestor guardado (Access Token OAuth)');",
+                  "        return access;",
+                  "    }",
+                  "    if (id && !access) {",
+                  "        throw new Error('Azure solo devolvio id_token (Access token grisado en Postman). Revisar Scope y Expose API en Azure B2C — ver POSTMAN_PRUEBAS.md');",
+                  "    }",
+                  "    const header = pm.request.headers.get('Authorization') || '';",
+                  "    if (header.startsWith('Bearer ') && id) {",
+                  "        const bearer = header.replace('Bearer ', '');",
+                  "        if (bearer === id) {",
+                  "            throw new Error('Authorization lleva ID Token. Use Token Type → Access Token → Get New Access Token → Use Token.');",
+                  "        }",
+                  "    }",
+                  "    return '';",
+                  "}",
+                  "const saved = syncOAuthAccessTokenToEnv() || pm.environment.get('access_token_gestor');",
+                  "if (!saved || saved.length < 20) {",
+                  "    throw new Error('SIN ACCESS TOKEN. Pasos: 1) Authorization → OAuth 2.0 2) Get New Access Token → login GESTOR 3) Use Token Type = Access Token 4) Use Token (obligatorio) 5) Send. Sin Use Token veras 401 sin body.');",
+                  "}",
+                  "pm.request.headers.upsert({ key: 'Authorization', value: 'Bearer ' + saved });",
+                  "try {",
+                  "    const p = JSON.parse(atob(saved.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));",
+                  "    console.log('Enviando Bearer | iss:', p.iss);",
+                  "    const expected = pm.environment.get('b2c_issuer_canonical');",
+                  "    if (p.iss !== expected) {",
+                  "        console.warn('iss token != environment. Token:', p.iss, '| Env:', expected);",
+                  "        console.warn('Azure emite b2c_1 en MINUSCULAS. Igualar AWS Authorizer y b2c_issuer_* en environment.');",
+                  "    }",
+                  "} catch (e) { /* ignore */ }"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "function parseJwtPayload(token) {",
+                  "    const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
+                  "    return JSON.parse(atob(b64));",
+                  "}",
+                  "function isLikelyIdToken(payload) {",
+                  "    const clientId = pm.environment.get('b2c_audience');",
+                  "    const apiScope = pm.environment.get('b2c_audience_scope');",
+                  "    const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];",
+                  "    const audStr = aud.filter(Boolean).join(',');",
+                  "    if (payload.token_use === 'id') return true;",
+                  "    if (audStr === clientId && !audStr.includes(apiScope) && !payload.scp) return true;",
+                  "    return false;",
+                  "}",
+                  "function getOAuthAccessToken() {",
+                  "    const oauth = pm.request.auth && pm.request.auth.oauth2;",
+                  "    if (!oauth) return '';",
+                  "    const entry = oauth.find(x => x.key === 'accessToken');",
+                  "    return (entry && entry.value) ? entry.value : '';",
+                  "}",
+                  "function resolveGestorAccessToken() {",
+                  "    const oauthAccess = getOAuthAccessToken();",
+                  "    if (oauthAccess) return oauthAccess;",
+                  "    const auth = pm.request.headers.get('Authorization') || '';",
+                  "    if (auth.startsWith('Bearer ')) return auth.replace('Bearer ', '');",
+                  "    return pm.environment.get('access_token_gestor') || '';",
+                  "}",
+                  "const token = resolveGestorAccessToken();",
+                  "if (!token) {",
+                  "    pm.test('FALTA TOKEN — Authorization → Get New Access Token → Use Token Type Access Token → Send', () => pm.expect.fail('No Bearer token'));",
+                  "    return;",
+                  "}",
+                  "pm.environment.set('access_token_gestor', token);",
+                  "const payload = parseJwtPayload(token);",
+                  "console.log('token_use:', payload.token_use || 'n/a', '| aud:', payload.aud, '| scp:', payload.scp || 'n/a');",
+                  "pm.test('NO es ID Token — usar Access Token (profesor)', () => pm.expect(isLikelyIdToken(payload)).to.be.false);",
+                  "pm.test('Access Token con extension_UserRole GESTOR', () => pm.expect(payload.extension_UserRole).to.eql('GESTOR_GUIAS'));",
+                  "pm.test('iss alineado con Gateway y Spring', () => pm.expect(payload.iss).to.eql(pm.environment.get('b2c_issuer_canonical')));",
+                  "if (pm.response.code === 401) {",
+                  "    let gwMsg = '';",
+                  "    try { gwMsg = pm.response.json().message || ''; } catch (e) { gwMsg = '(body vacio — sin Bearer o Gateway sin JWT)'; }",
+                  "    console.log('401 Gateway | body:', gwMsg);",
+                  "    console.log('Token iss:', payload.iss);",
+                  "    console.log('Token aud:', payload.aud);",
+                  "    console.log('Environment iss:', pm.environment.get('b2c_issuer_canonical'));",
+                  "    console.log('AWS Authorizer debe ser IDENTICO al iss del token (b2c_1 minusculas) + Deploy DEV');",
+                  "    if (payload.iss !== pm.environment.get('b2c_issuer_canonical')) {",
+                  "        console.warn('Reimporta Semana8.postman_environment.json (issuer b2c_1 minusculas)');",
+                  "    }",
+                  "    pm.test('Gateway 401 — revisar Use Token, iss AWS (b2c_1 minusculas), audience y Deploy DEV', () => pm.expect.fail(gwMsg || 'Unauthorized'));",
+                  "} else {",
+                  "    pm.test('200 OK — GESTOR via API Gateway', () => pm.response.to.have.status(200));",
+                  "}",
+                  "console.log('access_token_gestor guardado. Siguiente: 0.0 C → 0.0 B');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "oauth2",
+              "oauth2": [
+                {"key": "tokenName", "value": "gestor-access-token", "type": "string"},
+                {"key": "grant_type", "value": "authorization_code_with_pkce", "type": "string"},
+                {"key": "authUrl", "value": "{{b2c_auth_url}}", "type": "string"},
+                {"key": "accessTokenUrl", "value": "{{b2c_token_url}}", "type": "string"},
+                {"key": "clientId", "value": "{{b2c_client_id}}", "type": "string"},
+                {"key": "clientSecret", "value": "{{b2c_client_secret}}", "type": "string"},
+                {"key": "scope", "value": "{{b2c_scope}}", "type": "string"},
+                {"key": "redirect_uri", "value": "{{b2c_redirect_uri}}", "type": "string"},
+                {"key": "addTokenTo", "value": "header", "type": "string"},
+                {"key": "useTokenType", "value": "accessToken", "type": "string"}
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{api_gateway_url}}/api/pedidos",
+            "description": "**PASOS (obligatorio):**\n1. Abre esta request **0.1** (no uses tokens viejos del dropdown)\n2. Authorization → tipo **OAuth 2.0** → **Get New Access Token** → login GESTOR\n3. Tras login: popup debe mostrar pestaña **Access Token** (si solo ID Token → ver abajo)\n4. **Use Token Type = Access Token** (si esta grisado, Azure no devolvio access_token)\n5. **Use Token** → **Send**\n\n### Access token grisado (0.1 y 0.2)\nNo es bug de Postman: Azure B2C respondio solo `id_token`. Revisar **Scope** = `{{b2c_scope}}` y configuracion Expose API en Azure (POSTMAN_PRUEBAS.md).\n\nProbar scopes alternativos en Authorization → Scope (pegar valor completo del environment):\n- `{{b2c_scope_default_full}}`\n- `{{b2c_scope_client_id}}`\n\nLuego Manage Tokens → borrar tokens → Get New Access Token de nuevo."
+          },
+          "response": []
+        },
+        {
+          "name": "0.0 Diagnóstico — ¿Token válido? (EC2 vs Gateway)",
+          "description": "**Ejecutar DESPUÉS de 0.1.** El token se guarda en `access_token_gestor` cuando haces Send en 0.1 con **Use Token**.",
+          "item": [
+            {
+              "name": "A. EC2 directo + Bearer (prueba Spring Boot)",
+              "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "exec": [
+                      "function parseJwtPayload(token) {",
+                      "  const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
+                      "  return JSON.parse(atob(b64));",
+                      "}",
+                      "function isLikelyIdToken(payload) {",
+                      "  const clientId = pm.environment.get('b2c_audience');",
+                      "  const apiScope = pm.environment.get('b2c_audience_scope');",
+                      "  const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];",
+                      "  const audStr = aud.filter(Boolean).join(',');",
+                      "  if (payload.token_use === 'id') return true;",
+                      "  if (audStr === clientId && !audStr.includes(apiScope) && !payload.scp) return true;",
+                      "  return false;",
+                      "}",
+                      "function getGestorToken() {",
+                      "    const env = pm.environment.get('access_token_gestor');",
+                      "    if (env && env.length > 20) return env;",
+                      "    return null;",
+                      "}",
+                      "const t = getGestorToken();",
+                      "if (!t) {",
+                      "    throw new Error('access_token_gestor vacio. ORDEN: 1) Abre **0.1 Login GESTOR** 2) Authorization → Get New Access Token → login 3) **Use Token Type = Access Token** 4) **Send** en 0.1 5) Luego ejecuta 0.0 A.');",
+                      "}",
+                      "if (isLikelyIdToken(parseJwtPayload(t))) {",
+                      "    throw new Error('Estás usando ID Token. En 0.1 Authorization cambia Use Token Type a Access Token, Get New Access Token, Use Token y Send.');",
+                      "}",
+                      "pm.request.headers.upsert({ key: 'Authorization', value: 'Bearer ' + t });"
+                    ],
+                    "type": "text/javascript"
+                  }
+                },
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "if (pm.response.code === 200) {",
+                      "    pm.test('EC2 OK — token valido para Spring', () => true);",
+                      "} else if (pm.response.code === 401) {",
+                      "    pm.test('EC2 401 — token invalido/expirado o sin rol GESTOR_GUIAS', () => true);",
+                      "} else if (pm.response.code === 403) {",
+                      "    pm.test('EC2 403 — token OK pero falta claim extension_UserRole=GESTOR_GUIAS', () => true);",
+                      "}"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [{"key": "token", "value": "{{access_token_gestor}}", "type": "string"}]
+                },
+                "method": "GET",
+                "header": [],
+                "url": "http://{{ec2_host}}:8080/api/pedidos",
+                "description": "Si aqui responde **200** pero Gateway da Unauthorized, el problema esta en **AWS API Gateway JWT Authorizer** (issuer/audience), no en Spring Boot."
+              },
+              "response": []
+            },
+            {
+              "name": "B. API Gateway + Bearer (prueba JWT Authorizer)",
+              "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "exec": [
+                      "function parseJwtPayload(token) {",
+                      "  const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
+                      "  return JSON.parse(atob(b64));",
+                      "}",
+                      "function isLikelyIdToken(payload) {",
+                      "  const clientId = pm.environment.get('b2c_audience');",
+                      "  const apiScope = pm.environment.get('b2c_audience_scope');",
+                      "  const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];",
+                      "  const audStr = aud.filter(Boolean).join(',');",
+                      "  if (payload.token_use === 'id') return true;",
+                      "  if (audStr === clientId && !audStr.includes(apiScope) && !payload.scp) return true;",
+                      "  return false;",
+                      "}",
+                      "const t = pm.environment.get('access_token_gestor');",
+                      "if (!t || t.length < 20) {",
+                      "    throw new Error('access_token_gestor vacio. Ejecuta **0.1** primero (OAuth → Use Token Type Access Token → Send).');",
+                      "}",
+                      "if (isLikelyIdToken(parseJwtPayload(t))) {",
+                      "    throw new Error('Estás usando ID Token. En 0.1 Authorization cambia Use Token Type a Access Token, Get New Access Token, Use Token y Send.');",
+                      "}",
+                      "pm.request.headers.upsert({ key: 'Authorization', value: 'Bearer ' + t });"
+                    ],
+                    "type": "text/javascript"
+                  }
+                },
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "if (pm.response.code === 401 && pm.response.json().message === 'Unauthorized') {",
+                      "    pm.test('Gateway 401 — JWT Authorizer rechazo token (iss/aud AWS o token expirado)', () => pm.expect.fail('Unauthorized'));",
+                      "} else {",
+                      "    pm.test('Gateway OK — 200 token aceptado por azureidaas', () => pm.response.to.have.status(200));",
+                      "}"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [{"key": "token", "value": "{{access_token_gestor}}", "type": "string"}]
+                },
+                "method": "GET",
+                "header": [],
+                "url": "{{api_gateway_url}}/api/pedidos",
+                "description": "Ejecutar **después de 0.1 y 0.0 C**. Confirma que API Gateway acepta el Access Token.\n\n`{\"message\":\"Unauthorized\"}` = JWT Authorizer AWS (no Spring).\n\nIssuer: `{{b2c_issuer_gateway}}` | Audience: `{{b2c_audience}}`"
+              },
+              "response": []
+            },
+            {
+              "name": "C. Decodificar Access Token (iss, aud, rol)",
+              "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "exec": [
+                      "const token = pm.environment.get('access_token_gestor');",
+                      "if (!token || token.length < 20) {",
+                      "    throw new Error('access_token_gestor vacio. Ejecuta **0.1** primero (OAuth → Use Token Type Access Token → Send).');",
+                      "}",
+                      "function parseJwt(t) {",
+                      "  const b64 = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
+                      "  return JSON.parse(atob(b64));",
+                      "}",
+                      "const payload = parseJwt(token);",
+                      "pm.environment.set('token_iss', payload.iss || '');",
+                      "pm.environment.set('token_aud', Array.isArray(payload.aud) ? payload.aud.join(',') : (payload.aud || ''));",
+                      "pm.environment.set('token_role', payload.extension_UserRole || 'SIN_CLAIM');",
+                      "pm.environment.set('token_use', payload.token_use || '');",
+                      "pm.environment.set('token_scp', payload.scp || '');",
+                      "console.log('token_use:', payload.token_use || 'n/a');",
+                      "console.log('iss:', payload.iss);",
+                      "console.log('aud:', payload.aud);",
+                      "console.log('scp:', payload.scp || 'n/a');",
+                      "console.log('extension_UserRole:', payload.extension_UserRole);",
+                      "console.log('exp:', new Date(payload.exp * 1000).toISOString());"
+                    ],
+                    "type": "text/javascript"
+                  }
+                },
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "function isLikelyIdToken(payload) {",
+                      "  const clientId = pm.environment.get('b2c_audience');",
+                      "  const apiScope = pm.environment.get('b2c_audience_scope');",
+                      "  const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];",
+                      "  const audStr = aud.filter(Boolean).join(',');",
+                      "  if (payload.token_use === 'id') return true;",
+                      "  if (audStr === clientId && !audStr.includes(apiScope) && !payload.scp) return true;",
+                      "  return false;",
+                      "}",
+                      "const token = pm.environment.get('access_token_gestor');",
+                      "const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));",
+                      "const iss = pm.environment.get('token_iss');",
+                      "const aud = pm.environment.get('token_aud');",
+                      "const role = pm.environment.get('token_role');",
+                      "const issOk = iss === pm.environment.get('b2c_issuer_canonical');",
+                      "const audOk = aud.includes(pm.environment.get('b2c_audience')) || aud.includes(pm.environment.get('b2c_audience_scope'));",
+                      "pm.test('NO es ID Token — usar Access Token (profesor)', () => pm.expect(isLikelyIdToken(payload)).to.be.false);",
+                      "pm.test('iss coincide con issuer tfp B2C (b2c_1 minusculas)', () => pm.expect(issOk).to.be.true);",
+                      "console.log('Gateway usa issuer tfp distinto:', pm.environment.get('b2c_issuer_gateway'));",
+                      "pm.test('aud contiene client_id o scope API', () => pm.expect(audOk).to.be.true);",
+                      "pm.test('extension_UserRole presente', () => pm.expect(role).to.not.eql('SIN_CLAIM'));",
+                      "console.log('token_use:', payload.token_use || 'n/a', '| scp:', payload.scp || 'n/a');"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "https://postman-echo.com/get",
+                "description": "Decodifica `access_token_gestor` y valida iss/aud/rol contra variables del environment. **Profesor:** usar Access Token en Authorization, no ID Token."
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "0.2 Login LECTOR (OAuth 2.0 — Authorization Code)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "if (!pm.environment.name) {",
+                  "    throw new Error('Selecciona environment \"Semana 8\".');",
+                  "}",
+                  "function getOAuthAccessToken() {",
+                  "    const oauth = pm.request.auth && pm.request.auth.oauth2;",
+                  "    if (!oauth) return '';",
+                  "    const entry = oauth.find(x => x.key === 'accessToken');",
+                  "    return (entry && entry.value) ? entry.value : '';",
+                  "}",
+                  "function getOAuthIdToken() {",
+                  "    const oauth = pm.request.auth && pm.request.auth.oauth2;",
+                  "    if (!oauth) return '';",
+                  "    const entry = oauth.find(x => x.key === 'idToken');",
+                  "    return (entry && entry.value) ? entry.value : '';",
+                  "}",
+                  "function syncOAuthAccessTokenToEnv() {",
+                  "    const access = getOAuthAccessToken();",
+                  "    const id = getOAuthIdToken();",
+                  "    if (access) {",
+                  "        pm.environment.set('access_token_lector', access);",
+                  "        console.log('access_token_lector guardado (Access Token OAuth)');",
+                  "        return access;",
+                  "    }",
+                  "    if (id && !access) {",
+                  "        throw new Error('Azure solo devolvio id_token (sin access_token). Postman deja Access token grisado. Acciones: 1) Manage Tokens → borrar lector-access-token 2) Verificar Scope = {{b2c_scope}} (debe incluir scope API, no solo openid) 3) Get New Access Token → en popup debe aparecer pestaña Access Token 4) Si solo hay ID Token, revisar Azure B2C: app → Expose API + user flow con scope cdy2204-1');",
+                  "    }",
+                  "    const header = pm.request.headers.get('Authorization') || '';",
+                  "    if (header.startsWith('Bearer ') && id) {",
+                  "        const bearer = header.replace('Bearer ', '');",
+                  "        if (bearer === id) {",
+                  "            throw new Error('Authorization lleva ID Token. Use Token Type → Access Token → Get New Access Token → Use Token.');",
+                  "        }",
+                  "    }",
+                  "    return '';",
+                  "}",
+                  "const saved = syncOAuthAccessTokenToEnv() || pm.environment.get('access_token_lector');",
+                  "if (saved) {",
+                  "    pm.request.headers.remove('Authorization');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "function parseJwtPayload(token) {",
+                  "    const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
+                  "    return JSON.parse(atob(b64));",
+                  "}",
+                  "function isLikelyIdToken(payload) {",
+                  "    const clientId = pm.environment.get('b2c_audience');",
+                  "    const apiScope = pm.environment.get('b2c_audience_scope');",
+                  "    const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];",
+                  "    const audStr = aud.filter(Boolean).join(',');",
+                  "    if (payload.token_use === 'id') return true;",
+                  "    if (audStr === clientId && !audStr.includes(apiScope) && !payload.scp) return true;",
+                  "    return false;",
+                  "}",
+                  "function getOAuthAccessToken() {",
+                  "    const oauth = pm.request.auth && pm.request.auth.oauth2;",
+                  "    if (!oauth) return '';",
+                  "    const entry = oauth.find(x => x.key === 'accessToken');",
+                  "    return (entry && entry.value) ? entry.value : '';",
+                  "}",
+                  "function resolveLectorAccessToken() {",
+                  "    const oauthAccess = getOAuthAccessToken();",
+                  "    if (oauthAccess) return oauthAccess;",
+                  "    const auth = pm.request.headers.get('Authorization') || '';",
+                  "    if (auth.startsWith('Bearer ')) return auth.replace('Bearer ', '');",
+                  "    return pm.environment.get('access_token_lector') || '';",
+                  "}",
+                  "const token = resolveLectorAccessToken();",
+                  "if (token) {",
+                  "    pm.environment.set('access_token_lector', token);",
+                  "    const payload = parseJwtPayload(token);",
+                  "    console.log('token_use:', payload.token_use || 'n/a', '| aud:', payload.aud, '| scp:', payload.scp || 'n/a');",
+                  "    pm.test('NO es ID Token — usar Access Token (profesor)', () => pm.expect(isLikelyIdToken(payload)).to.be.false);",
+                  "    pm.test('Access Token LECTOR_GUIAS', () => pm.expect(payload.extension_UserRole).to.eql('LECTOR_GUIAS'));",
+                  "    pm.test('iss alineado con B2C', () => pm.expect(payload.iss).to.eql(pm.environment.get('b2c_issuer_canonical')));",
+                  "    console.log('access_token_lector guardado. Siguiente: Carpeta 2');",
+                  "} else {",
+                  "    pm.test('FALTA TOKEN — Get New Access Token → Use Token Type Access Token → Send', () => pm.expect.fail('No Bearer token'));",
+                  "    return;",
+                  "}",
+                  "pm.test('200 OK — login LECTOR OAuth completado', () => pm.response.to.have.status(200));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "oauth2",
+              "oauth2": [
+                {"key": "tokenName", "value": "lector-access-token", "type": "string"},
+                {"key": "grant_type", "value": "authorization_code_with_pkce", "type": "string"},
+                {"key": "authUrl", "value": "{{b2c_auth_url}}", "type": "string"},
+                {"key": "accessTokenUrl", "value": "{{b2c_token_url}}", "type": "string"},
+                {"key": "clientId", "value": "{{b2c_client_id}}", "type": "string"},
+                {"key": "clientSecret", "value": "{{b2c_client_secret}}", "type": "string"},
+                {"key": "scope", "value": "{{b2c_scope}}", "type": "string"},
+                {"key": "redirect_uri", "value": "{{b2c_redirect_uri}}", "type": "string"},
+                {"key": "addTokenTo", "value": "header", "type": "string"},
+                {"key": "useTokenType", "value": "accessToken", "type": "string"}
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{b2c_openid_config_url}}",
+            "description": "**Login LECTOR — solo OAuth.**\n\n### URL de esta request (200 OK)\n`{{b2c_openid_config_url}}` — metadata publica de Azure B2C. **No uses** `/api/pedidos` aqui (da **403** para LECTOR, es normal) ni S3 (necesita PDF).\n\n### Pasos\n1. Authorization → **OAuth 2.0** → **Get New Access Token** → login `lisbeth.bilbao.merino@gmail.com`\n2. **Use Token Type = Access Token** → **Use Token** → **Send**\n3. Tests verde: `LECTOR_GUIAS` + **200 OK**\n\n### Prueba real API Gateway (LECTOR)\n**Carpeta 2** → GET descargar guia → **200** PDF (tras Carpeta 1)"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1. Flujo GESTOR — API Gateway (Producer encola)",
+      "description": "Flujo GESTOR_GUIAS vía {{api_gateway_url}}. Las escrituras de guías retornan **202 Accepted** con estado ENCOLADO; el consumer procesa de forma asíncrona.",
+      "item": [
+        {
+          "name": "1. Negocio — Pedidos y Guías",
+          "item": [
+            {
+              "name": "1. POST — Crear pedido 1 (TransportesSur)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                      "const body = pm.response.json();",
+                      "pm.environment.set('pedido_id_1', body.id);",
+                      "pm.environment.set('fecha', body.fecha);",
+                      "pm.environment.set('transportista', body.transportista);"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"cliente\": \"Maria Lopez\",\n  \"direccion\": \"Av. Libertad 123, Santiago\",\n  \"descripcion\": \"Caja mediana fragil\",\n  \"transportista\": \"TransportesSur\",\n  \"fecha\": \"20250604\"\n}"
+                },
+                "url": "{{api_gateway_url}}/api/pedidos",
+                "description": "Crea PED-001. Key futura: 20250604/TransportesSur/guia-PED-001.pdf"
+              },
+              "response": []
+            },
+            {
+              "name": "2. POST — Generar guía pedido 1 (encola RabbitMQ)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('202 Accepted — mensaje encolado', () => pm.response.to.have.status(202));",
+                      "const body = pm.response.json();",
+                      "pm.test('estado ENCOLADO', () => pm.expect(body.estado).to.eql('ENCOLADO'));",
+                      "pm.test('tipo GENERAR_GUIA', () => pm.expect(body.tipo).to.eql('GENERAR_GUIA'));",
+                      "pm.environment.set('message_id_guia_1', body.messageId);",
+                      "const pedidoId = pm.environment.get('pedido_id_1');",
+                      "pm.environment.set('nombreGuia', 'guia-' + pedidoId);",
+                      "const fecha = pm.environment.get('fecha');",
+                      "const transportista = pm.environment.get('transportista');",
+                      "pm.environment.set('s3_key_pedido_1', fecha + '/' + transportista + '/guia-' + pedidoId + '.pdf');",
+                      "console.log('Guia encolada. Esperar consumer y luego consultar S3 (Carpeta 1.2 o 2.1).');"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": "{{api_gateway_url}}/api/pedidos/{{pedido_id_1}}/generar-guia",
+                "description": "Encola GENERAR_GUIA en RabbitMQ (202). El consumer genera PDF y guarda en EFS, S3 y Oracle. Verificar en RabbitMQ UI (:15672) y luego GET consulta S3."
+              },
+              "response": []
+            },
+            {
+              "name": "3. POST — Crear pedido 2 (TransportesNorte)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                      "const body = pm.response.json();",
+                      "pm.environment.set('pedido_id_2', body.id);",
+                      "pm.environment.set('fecha2', body.fecha);",
+                      "pm.environment.set('transportista2', body.transportista);"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"cliente\": \"Carlos Pino\",\n  \"direccion\": \"Calle Norte 456, Valparaiso\",\n  \"descripcion\": \"Documentos urgentes\",\n  \"transportista\": \"TransportesNorte\",\n  \"fecha\": \"20250605\"\n}"
+                },
+                "url": "{{api_gateway_url}}/api/pedidos",
+                "description": "Crea PED-002 en carpeta 20250605/TransportesNorte/"
+              },
+              "response": []
+            },
+            {
+              "name": "4. POST — Generar guía pedido 2 (encola RabbitMQ)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('202 Accepted — mensaje encolado', () => pm.response.to.have.status(202));",
+                      "const body = pm.response.json();",
+                      "pm.test('estado ENCOLADO', () => pm.expect(body.estado).to.eql('ENCOLADO'));",
+                      "pm.environment.set('message_id_guia_2', body.messageId);",
+                      "const pedidoId = pm.environment.get('pedido_id_2');",
+                      "pm.environment.set('nombreGuia2', 'guia-' + pedidoId);",
+                      "const fecha2 = pm.environment.get('fecha2');",
+                      "const transportista2 = pm.environment.get('transportista2');",
+                      "pm.environment.set('s3_key_pedido_2', fecha2 + '/' + transportista2 + '/guia-' + pedidoId + '.pdf');"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": "{{api_gateway_url}}/api/pedidos/{{pedido_id_2}}/generar-guia",
+                "description": "Segunda guía encolada: 20250605/TransportesNorte/guia-PED-002.pdf (procesamiento async)."
+              },
+              "response": []
+            },
+            {
+              "name": "5. GET — Listar pedidos",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                      "pm.test('hay al menos 2 pedidos', () => pm.expect(pm.response.json().length).to.be.at.least(2));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{api_gateway_url}}/api/pedidos"
+              },
+              "response": []
+            },
+            {
+              "name": "6. GET — Obtener pedido 1",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                      "const body = pm.response.json();",
+                      "pm.test('estadoGuia PENDIENTE o PROCESADA', () => pm.expect(['PENDIENTE', 'PROCESADA', null]).to.include(body.estadoGuia));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{api_gateway_url}}/api/pedidos/{{pedido_id_1}}"
+              },
+              "response": []
+            },
+            {
+              "name": "7. PUT — Actualizar pedido 1",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                      "pm.test('descripcion actualizada', () => pm.expect(pm.response.json().descripcion).to.include('actualizada'));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "PUT",
+                "header": [{"key": "Content-Type", "value": "application/json"}],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"cliente\": \"Maria Lopez\",\n  \"direccion\": \"Av. Libertad 999, Santiago\",\n  \"descripcion\": \"Caja mediana fragil - actualizada\",\n  \"transportista\": \"TransportesSur\",\n  \"fecha\": \"20250604\"\n}"
+                },
+                "url": "{{api_gateway_url}}/api/pedidos/{{pedido_id_1}}",
+                "description": "Modificar/actualizar pedido (requiere GESTOR_GUIAS)."
+              },
+              "response": []
+            },
+            {
+              "name": "8. DELETE — Eliminar pedido 2 (memoria)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": "{{api_gateway_url}}/api/pedidos/{{pedido_id_2}}",
+                "description": "Elimina pedido de memoria (no borra PDF en S3/EFS)."
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "2. Cloud — EFS + S3",
+          "item": [
+            {
+              "name": "1. GET — Listar todo el bucket",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                      "pm.test('al menos 2 objetos', () => pm.expect(pm.response.json().length).to.be.at.least(2));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{api_gateway_url}}/s3/{{bucket}}/objects",
+                "description": "Inventario completo del bucket."
+              },
+              "response": []
+            },
+            {
+              "name": "2. GET — Consultar guías TransportesSur",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                      "pm.test('hay al menos 1 guia TransportesSur', () => pm.expect(pm.response.json().total).to.be.at.least(1));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{api_gateway_url}}/s3/{{bucket}}/consulta?fecha={{fecha}}&transportista={{transportista}}",
+                  "host": ["{{api_gateway_url}}"],
+                  "path": ["s3", "{{bucket}}", "consulta"],
+                  "query": [
+                    {"key": "fecha", "value": "{{fecha}}"},
+                    {"key": "transportista", "value": "{{transportista}}"}
+                  ]
+                },
+                "description": "Consultar guías por transportista y fecha."
+              },
+              "response": []
+            },
+            {
+              "name": "3. GET — Consultar guías TransportesNorte",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                      "pm.test('hay al menos 1 guia TransportesNorte', () => pm.expect(pm.response.json().total).to.be.at.least(1));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{api_gateway_url}}/s3/{{bucket}}/consulta?fecha={{fecha2}}&transportista={{transportista2}}",
+                  "host": ["{{api_gateway_url}}"],
+                  "path": ["s3", "{{bucket}}", "consulta"],
+                  "query": [
+                    {"key": "fecha", "value": "{{fecha2}}"},
+                    {"key": "transportista", "value": "{{transportista2}}"}
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "4. GET — Descargar guía pedido 1",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{api_gateway_url}}/s3/{{bucket}}/object?fecha={{fecha}}&transportista={{transportista}}&nombreGuia={{nombreGuia}}",
+                  "host": ["{{api_gateway_url}}"],
+                  "path": ["s3", "{{bucket}}", "object"],
+                  "query": [
+                    {"key": "fecha", "value": "{{fecha}}"},
+                    {"key": "transportista", "value": "{{transportista}}"},
+                    {"key": "nombreGuia", "value": "{{nombreGuia}}"}
+                  ]
+                },
+                "description": "Descargar guía con validación de permisos (GESTOR o LECTOR)."
+              },
+              "response": []
+            },
+            {
+              "name": "5. POST — Subir PDF externo (encola)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('202 Accepted — subida encolada', () => pm.response.to.have.status(202));",
+                      "const body = pm.response.json();",
+                      "pm.test('tipo SUBIR_GUIA', () => pm.expect(body.tipo).to.eql('SUBIR_GUIA'));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {"key": "file", "type": "file", "src": [], "description": "PDF desde tu PC"},
+                    {"key": "fecha", "value": "{{fecha}}", "type": "text"},
+                    {"key": "transportista", "value": "{{transportista}}", "type": "text"},
+                    {"key": "nombreGuia", "value": "{{nombreGuiaExterna}}", "type": "text"}
+                  ]
+                },
+                "url": "{{api_gateway_url}}/s3/{{bucket}}/object",
+                "description": "Subir guía generada externamente a S3."
+              },
+              "response": []
+            },
+            {
+              "name": "6. PUT — Actualizar guía pedido 1 (encola)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('202 Accepted — actualización encolada', () => pm.response.to.have.status(202));",
+                      "const base = pm.environment.get('nombreGuia').replace(/-actualizado/g, '');",
+                      "const fecha = pm.environment.get('fecha');",
+                      "const transportista = pm.environment.get('transportista');",
+                      "const updated = base + '-actualizado';",
+                      "pm.environment.set('nombreGuia', updated);",
+                      "pm.environment.set('s3_key_pedido_1', fecha + '/' + transportista + '/' + updated + '.pdf');",
+                      "console.log('PUT guia: s3_key_pedido_1 →', pm.environment.get('s3_key_pedido_1'));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "PUT",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {"key": "file", "type": "file", "src": [], "description": "PDF descargado en paso 4"},
+                    {"key": "fecha", "value": "{{fecha}}", "type": "text"},
+                    {"key": "transportista", "value": "{{transportista}}", "type": "text"},
+                    {"key": "nombreGuia", "value": "{{nombreGuia}}", "type": "text"}
+                  ]
+                },
+                "url": "{{api_gateway_url}}/s3/{{bucket}}/object",
+                "description": "Modificar guía existente en S3 y EFS. Tras 200 actualiza `nombreGuia` y `s3_key_pedido_1` (un solo -actualizado, idempotente)."
+              },
+              "response": []
+            },
+            {
+              "name": "7. POST — Mover objeto en bucket (encola)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('202 Accepted — movimiento encolado', () => pm.response.to.have.status(202));",
+                      "const fecha = pm.environment.get('fecha');",
+                      "const transportista = pm.environment.get('transportista');",
+                      "pm.environment.set('nombreGuia', 'guia-movida-demo');",
+                      "pm.environment.set('s3_key_pedido_1', fecha + '/' + transportista + '/guia-movida-demo.pdf');",
+                      "console.log('Move: s3_key_pedido_1 →', pm.environment.get('s3_key_pedido_1'));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{api_gateway_url}}/s3/{{bucket}}/move?sourceKey={{fecha}}/{{transportista}}/{{nombreGuia}}.pdf&destKey={{fecha}}/{{transportista}}/guia-movida-demo.pdf",
+                  "host": ["{{api_gateway_url}}"],
+                  "path": ["s3", "{{bucket}}", "move"],
+                  "query": [
+                    {"key": "sourceKey", "value": "{{fecha}}/{{transportista}}/{{nombreGuia}}.pdf"},
+                    {"key": "destKey", "value": "{{fecha}}/{{transportista}}/guia-movida-demo.pdf"}
+                  ]
+                },
+                "description": "Mueve objeto dentro del mismo bucket (demo). Tras 200 actualiza `nombreGuia` y `s3_key_pedido_1` → guia-movida-demo.pdf."
+              },
+              "response": []
+            },
+            {
+              "name": "8. DELETE — Eliminar guía pedido 2 (encola)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('202 Accepted — eliminación encolada', () => pm.response.to.have.status(202));",
+                      "const body = pm.response.json();",
+                      "pm.test('tipo ELIMINAR_GUIA', () => pm.expect(body.tipo).to.eql('ELIMINAR_GUIA'));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ],
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{api_gateway_url}}/s3/{{bucket}}/object?fecha={{fecha2}}&transportista={{transportista2}}&nombreGuia={{nombreGuia2}}",
+                  "host": ["{{api_gateway_url}}"],
+                  "path": ["s3", "{{bucket}}", "object"],
+                  "query": [
+                    {"key": "fecha", "value": "{{fecha2}}"},
+                    {"key": "transportista", "value": "{{transportista2}}"},
+                    {"key": "nombreGuia", "value": "{{nombreGuia2}}"}
+                  ]
+                },
+                "description": "Eliminar guía específica de S3 y EFS."
+              },
+              "response": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. RabbitMQ — Consumer y DLQ",
+      "description": "Monitoreo del microservicio consumer (:8081) vía API Gateway. Ejecutar después de encolar guías en Carpeta 1. Evidenciar RabbitMQ Management UI (:15672) en el video.",
+      "item": [
+        {
+          "name": "1. GET — Estado cola principal (guias.queue)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('cola guias.queue', () => pm.expect(body.cola).to.eql('guias.queue'));",
+                  "console.log('Mensajes pendientes:', body.mensajesPendientes);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{api_gateway_url}}/api/cola/estado",
+            "description": "Mensajes pendientes en la cola principal. Tras procesamiento del consumer debería bajar a 0."
+          },
+          "response": []
+        },
+        {
+          "name": "2. GET — Estado DLQ (guias.dlq)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('cola guias.dlq', () => pm.expect(body.cola).to.eql('guias.dlq'));",
+                  "console.log('Mensajes en DLQ:', body.mensajesPendientes);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{api_gateway_url}}/api/cola/dlq/estado"
+          },
+          "response": []
+        },
+        {
+          "name": "3. POST — Generar guía con error simulado (→ DLQ)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('202 Accepted — error encolado para DLQ', () => pm.response.to.have.status(202));",
+                  "console.log('Esperar consumer; mensaje debe aparecer en guias.dlq. Ver paso 2 y 4.');"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "X-Simular-Error", "value": "true" }],
+            "url": "{{api_gateway_url}}/api/pedidos/{{pedido_id_1}}/generar-guia",
+            "description": "Crea un pedido nuevo antes si ya generaste guía del pedido 1. O usa otro pedido_id. El consumer falla a propósito y el mensaje va a DLQ."
+          },
+          "response": []
+        },
+        {
+          "name": "4. GET — Listar mensajes en DLQ",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "console.log('Total mensajes DLQ leídos:', body.total);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{api_gateway_url}}/api/dlq/mensajes?limite=10",
+            "description": "Lista mensajes de error para evidencia en video."
+          },
+          "response": []
+        },
+        {
+          "name": "5. POST — Procesar un mensaje manual",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "console.log(pm.response.json());"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{api_gateway_url}}/api/cola/procesar-uno",
+            "description": "Consumo manual de 1 mensaje (endpoint adicional S8)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Validación rol LECTOR_GUIAS",
+      "description": "LECTOR puede descargar (200) pero no crear ni eliminar (403). **Pre-requisito:** 0.2 con token LECTOR, Carpeta 1 pasos 1-2 y consumer haya procesado la guía (consultar S3 antes).",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{access_token_lector}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "1. GET — Descargar guía (LECTOR permitido → 200)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "const key = pm.environment.get('s3_key_pedido_1');",
+                  "if (!key) {",
+                  "    throw new Error('s3_key_pedido_1 vacio. ORDEN: Carpeta 1 → 1. POST Crear pedido 1 → 2. POST Generar guia pedido 1 (201).');",
+                  "}",
+                  "const fileName = key.split('/').pop().replace(/\\.pdf$/i, '');",
+                  "pm.environment.set('nombreGuia', fileName);",
+                  "console.log('Carpeta 2 GET: nombreGuia sincronizado desde s3_key_pedido_1 →', fileName);"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK — LECTOR puede descargar', () => pm.response.to.have.status(200));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{api_gateway_url}}/s3/{{bucket}}/object?fecha={{fecha}}&transportista={{transportista}}&nombreGuia={{nombreGuia}}",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["s3", "{{bucket}}", "object"],
+              "query": [
+                {"key": "fecha", "value": "{{fecha}}"},
+                {"key": "transportista", "value": "{{transportista}}"},
+                {"key": "nombreGuia", "value": "{{nombreGuia}}"}
+              ]
+            },
+            "description": "Descarga guia PDF via Gateway. Pre-request sincroniza `nombreGuia` desde `s3_key_pedido_1` (fuente de verdad tras generar/actualizar/mover guia)."
+          },
+          "response": []
+        },
+        {
+          "name": "2. POST — Crear pedido (LECTOR denegado → 403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('403 Forbidden — LECTOR no puede crear', () => pm.response.to.have.status(403));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cliente\": \"Test Lector\",\n  \"direccion\": \"Calle 1\",\n  \"descripcion\": \"Intento denegado\",\n  \"transportista\": \"TransportesSur\",\n  \"fecha\": \"20250604\"\n}"
+            },
+            "url": "{{api_gateway_url}}/api/pedidos"
+          },
+          "response": []
+        },
+        {
+          "name": "3. DELETE — Eliminar guía (LECTOR denegado → 403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('403 Forbidden — LECTOR no puede eliminar', () => pm.response.to.have.status(403));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{api_gateway_url}}/s3/{{bucket}}/object?fecha={{fecha2}}&transportista={{transportista2}}&nombreGuia={{nombreGuia2}}",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["s3", "{{bucket}}", "object"],
+              "query": [
+                {"key": "fecha", "value": "{{fecha2}}"},
+                {"key": "transportista", "value": "{{transportista2}}"},
+                {"key": "nombreGuia", "value": "{{nombreGuia2}}"}
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Validación seguridad — 401 sin token",
+      "description": "Requests sin Authorization deben retornar 401 Unauthorized.",
+      "auth": {
+        "type": "noauth"
+      },
+      "item": [
+        {
+          "name": "1. GET pedidos sin token → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{api_gateway_url}}/api/pedidos"
+          },
+          "response": []
+        },
+        {
+          "name": "2. GET listar bucket sin token → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{api_gateway_url}}/s3/{{bucket}}/objects"
+          },
+          "response": []
+        },
+        {
+          "name": "3. GET descargar guía sin token → 401",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{api_gateway_url}}/s3/{{bucket}}/object?fecha={{fecha}}&transportista={{transportista}}&nombreGuia={{nombreGuia}}",
+              "host": ["{{api_gateway_url}}"],
+              "path": ["s3", "{{bucket}}", "object"],
+              "query": [
+                {"key": "fecha", "value": "{{fecha}}"},
+                {"key": "transportista", "value": "{{transportista}}"},
+                {"key": "nombreGuia", "value": "{{nombreGuia}}"}
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Debug EC2 directo (no evaluación)",
+      "description": "Solo depuración. No usar en presentación Teams — la actividad exige API Gateway.",
+      "item": [
+        {
+          "name": "GET pedidos EC2 directo con token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('200 OK (EC2 directo)', () => pm.response.to.have.status(200));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {"key": "token", "value": "{{access_token_gestor}}", "type": "string"}
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": "http://{{ec2_host}}:8080/api/pedidos"
+          },
+          "response": []
+        },
+        {
+          "name": "GET pedidos EC2 directo sin token → 401",
+          "auth": {
+            "type": "noauth"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('401 Unauthorized (EC2 directo)', () => pm.response.to.have.status(401));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "http://{{ec2_host}}:8080/api/pedidos"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (!pm.environment.name || pm.environment.name !== 'Semana 8') {",
+          "    console.warn('⚠ Selecciona el environment \"Semana 8\" — sin el, {{gestor_password}} y demas variables quedan vacias.');",
+          "}"
+        ]
+      }
+    }
+  ]
+}
