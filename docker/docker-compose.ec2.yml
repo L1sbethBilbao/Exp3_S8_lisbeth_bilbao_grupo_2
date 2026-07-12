@@ -1,0 +1,75 @@
+# Stack Semana 8 en EC2 usando imagenes publicadas en DockerHub.
+# Uso manual (si no usas GitHub Actions):
+#   export DOCKERHUB_USERNAME=tu_usuario
+#   export AWS_S3_BUCKET=cdy2204-1
+#   export ORACLE_JDBC_URL=jdbc:oracle:thin:@...
+#   docker compose -f docker-compose.ec2.yml up -d
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guias}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-guias_secret}
+    networks:
+      - guias-net
+
+  producer:
+    image: ${DOCKERHUB_USERNAME}/empresa-transportista-efs:latest
+    container_name: empresa-transportista-efs
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-guias}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guias_secret}
+      EFS_PATH: /app/efs
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
+    volumes:
+      - ${EFS_MOUNT_PATH:-/home/ec2-user/efs}:/app/efs
+    depends_on:
+      - rabbitmq
+    networks:
+      - guias-net
+
+  consumer:
+    image: ${DOCKERHUB_USERNAME}/empresa-transportista-consumer:latest
+    container_name: empresa-transportista-consumer
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-guias}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guias_secret}
+      EFS_PATH: /app/efs
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
+      ORACLE_JDBC_URL: ${ORACLE_JDBC_URL}
+      ORACLE_USER: ${ORACLE_USER}
+      ORACLE_PASSWORD: ${ORACLE_PASSWORD}
+    volumes:
+      - ${EFS_MOUNT_PATH:-/home/ec2-user/efs}:/app/efs
+    depends_on:
+      - rabbitmq
+    networks:
+      - guias-net
+
+networks:
+  guias-net:
+    driver: bridge
