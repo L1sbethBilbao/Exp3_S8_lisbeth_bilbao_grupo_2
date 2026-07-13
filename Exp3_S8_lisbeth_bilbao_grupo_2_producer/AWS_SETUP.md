@@ -1,6 +1,6 @@
 # Guia de aprovisionamiento AWS
 
-Pasos para configurar la infraestructura requerida por la actividad **Semana 8** (RabbitMQ + Producer + Consumer).
+Pasos para configurar la infraestructura requerida por la actividad **Semana 8** (RabbitMQ + PostgreSQL + Producer + Consumer).
 
 > Despliegue detallado: [DEPLOY_S8.md](DEPLOY_S8.md)
 
@@ -25,7 +25,7 @@ Pasos para configurar la infraestructura requerida por la actividad **Semana 8**
 
 1. Lanzar instancia Amazon Linux 2023 o Ubuntu
 2. Asignar **Elastic IP**
-3. Security group: abrir puertos **8080** (producer), **8081** (consumer), **15672** (RabbitMQ UI, opcional) y **22** (SSH)
+3. Security group: abrir puertos **8080** (producer), **8081** (consumer), **5672** (RabbitMQ), **15672** (RabbitMQ UI) y **22** (SSH). PostgreSQL (5432) solo interno en Docker.
 4. Asociar **IAM Role** con permisos S3 (ver seccion 4)
 5. Misma VPC/subnet que EFS
 
@@ -90,7 +90,7 @@ fs-XXXXXXXX:/ /home/ec2-user/efs efs defaults,_netdev 0 0
 
 ## 6. Despliegue en EC2 (Semana 8)
 
-El workflow `.github/workflows/deploy.yml` levanta **RabbitMQ**, **producer** (`:8080`) y **consumer** (`:8081`) en red Docker `guias-net`.
+El workflow `.github/workflows/deploy.yml` levanta **RabbitMQ**, **PostgreSQL**, **producer** (`:8080`) y **consumer** (`:8081`) en red Docker `guias-net`.
 
 Despliegue manual alternativo:
 
@@ -99,7 +99,7 @@ cd docker
 docker compose -f docker-compose.ec2.yml up -d
 ```
 
-Ver [DEPLOY_S8.md](DEPLOY_S8.md) para variables de entorno (RabbitMQ, Oracle, AWS).
+Ver [DEPLOY_S8.md](DEPLOY_S8.md) para variables de entorno (RabbitMQ, PostgreSQL, AWS).
 
 ### Verificar cadena EFS (para el video)
 
@@ -157,14 +157,13 @@ Configurar en el repositorio → Settings → Secrets:
 | `EFS_PATH` | Ruta EFS en contenedor (default: `/app/efs`) |
 | `RABBITMQ_USER` | Usuario RabbitMQ (default: `guias`) |
 | `RABBITMQ_PASS` | Password RabbitMQ (default: `guias_secret`) |
-| `ORACLE_JDBC_URL` | JDBC Oracle OCI |
-| `ORACLE_USER` | Usuario Oracle |
-| `ORACLE_PASSWORD` | Password Oracle |
-| `CONSUMER_REPO` | Repo GitHub del consumer (opcional) |
+| `POSTGRES_DB` | Base PostgreSQL (default: `guias_db`) |
+| `POSTGRES_USER` | Usuario PostgreSQL (default: `guias`) |
+| `POSTGRES_PASSWORD` | Password PostgreSQL (default: `guias_secret`) |
 
 **EFS:** montar en EC2 con `sudo mount -t efs fs-XXXXXXXX:/ /home/ec2-user/efs`. El deploy mapea `-v EFS_MOUNT_PATH:EFS_PATH` en producer y consumer.
 
-**Nota:** La conexion SSH a EC2 usa `USER_SERVER` + `EC2_SSH_KEY`. Las credenciales AWS se pasan a los contenedores para S3. RabbitMQ y Oracle son requeridos para Semana 8.
+**Nota:** La conexion SSH a EC2 usa `USER_SERVER` + `EC2_SSH_KEY`. Las credenciales AWS se pasan a los contenedores para S3. RabbitMQ y PostgreSQL corren en docker-compose dentro de EC2.
 
 **Importante:** Las credenciales AWS Academy **expiran**. Cuando caduquen, actualiza los 3 secrets en GitHub y vuelve a ejecutar el workflow.
 
@@ -181,7 +180,7 @@ Consumer (:8081)
     └── GuiaProcesamientoService
             ├── GuiaGeneradorService (PDF)
             ├── EfsService + AwsS3Service
-            └── GuiaPersistenciaService (Oracle)
+            └── GuiaPersistenciaService (PostgreSQL)
 ```
 
 El bucket va en la URL como path variable `/{bucket}/`, igual que el proyecto del profesor.
@@ -196,9 +195,9 @@ Tras generar 2 guias (Postman carpeta 1), la estructura en EFS y S3 es:
 ## Checklist antes de grabar el video
 
 - [ ] EFS montado en `/home/ec2-user/efs` (`df -h` lo muestra)
-- [ ] Contenedores corriendo: `rabbitmq`, producer `:8080`, consumer `:8081`
+- [ ] Contenedores corriendo: `rabbitmq`, `postgres-guias`, producer `:8080`, consumer `:8081`
 - [ ] Bucket S3 creado y accesible desde EC2
-- [ ] Oracle: tabla `GUIAS_DESPACHO_S8` creada (`consumer/docs/oracle_guias_s8.sql`)
+- [ ] PostgreSQL: tabla `guias_despacho_s8` creada automaticamente (`docker/init/postgres_guias_s8.sql`)
 - [ ] `POST .../generar-guia` retorna **202 ENCOLADO** y consumer persiste en S3
 - [ ] `GET /api/cola/estado` (consumer) muestra cola procesada
 - [ ] GitHub Actions despliega al hacer push a `main`

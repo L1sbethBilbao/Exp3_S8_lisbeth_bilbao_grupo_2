@@ -43,7 +43,7 @@ Si entras, esa es la clave correcta para GitHub.
 | `EC2_HOST` | `52.45.88.121` |
 | `USER_SERVER` | `ec2-user` |
 
-Secrets adicionales para Semana 8 (RabbitMQ, Oracle, Docker): ver [GITHUB_SECRETS.md](GITHUB_SECRETS.md).
+Secrets adicionales para Semana 8 (RabbitMQ, PostgreSQL, Docker): ver [GITHUB_SECRETS.md](GITHUB_SECRETS.md).
 
 ## El workflow NO es el problema
 

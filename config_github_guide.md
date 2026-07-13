@@ -1,12 +1,13 @@
 # Guía de configuración — GitHub Actions (Semana 8)
 
-Configuración de secrets y variables para el workflow [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), que despliega **3 contenedores** en EC2:
+Configuración de secrets y variables para el workflow [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), que despliega **4 contenedores** en EC2:
 
 | Contenedor | Puerto | Rol |
 |------------|--------|-----|
 | `rabbitmq` | 5672, 15672 | Message broker |
+| `postgres-guias` | 5432 (interno) | Base de datos PostgreSQL |
 | `empresa-transportista-efs` | 8080 | Producer — encola operaciones |
-| `empresa-transportista-consumer` | 8081 | Consumer — procesa cola, S3, Oracle |
+| `empresa-transportista-consumer` | 8081 | Consumer — procesa cola, S3, PostgreSQL |
 
 ## Flujo del workflow
 
@@ -15,9 +16,9 @@ Configuración de secrets y variables para el workflow [`.github/workflows/deplo
    - `empresa-transportista-efs:latest` (producer)
    - `empresa-transportista-consumer:latest` (consumer)
 3. SSH a EC2 (Elastic IP)
-4. Copia `docker/docker-compose.ec2.yml` y genera `.env` con secrets
+4. Copia `docker/docker-compose.ec2.yml`, script SQL init y genera `.env` con secrets
 5. Ejecuta `docker compose -f docker-compose.ec2.yml up -d`
-6. Levanta RabbitMQ + producer + consumer en red `guias-net`
+6. Levanta RabbitMQ + PostgreSQL + producer + consumer en red `guias-net`
 
 ## Secrets obligatorios
 
@@ -34,9 +35,6 @@ Configurar en: **Settings → Secrets and variables → Actions → New reposito
 | `AWS_SECRET_ACCESS_KEY` | Credencial temporal AWS Academy | Desde Learner Lab |
 | `AWS_SESSION_TOKEN` | Token de sesión AWS Academy | Desde Learner Lab |
 | `AWS_S3_BUCKET` | Nombre del bucket S3 | `cdy2204-1` |
-| `ORACLE_JDBC_URL` | URL JDBC hacia Oracle en OCI | `jdbc:oracle:thin:@(description=...)` |
-| `ORACLE_USER` | Usuario de la base Oracle | `ADMIN` |
-| `ORACLE_PASSWORD` | Password de la base Oracle | `tu_password` |
 
 ## Secrets opcionales
 
@@ -44,8 +42,13 @@ Configurar en: **Settings → Secrets and variables → Actions → New reposito
 |--------|-------------------|-------------|
 | `RABBITMQ_USER` | `guias` | Usuario RabbitMQ (no usar `guest` entre contenedores) |
 | `RABBITMQ_PASS` | `guias_secret` | Password RabbitMQ |
+| `POSTGRES_DB` | `guias_db` | Nombre de la base PostgreSQL |
+| `POSTGRES_USER` | `guias` | Usuario PostgreSQL |
+| `POSTGRES_PASSWORD` | `guias_secret` | Password PostgreSQL |
 | `EFS_MOUNT_PATH` | `/home/ec2-user/efs` | Ruta donde EFS está montado en EC2 |
 | `EFS_PATH` | `/app/efs` | Ruta EFS dentro de los contenedores |
+
+> PostgreSQL se levanta automáticamente en docker-compose. No necesitas secrets de Oracle ni conexión externa a OCI.
 
 ## Cómo agregar un secret
 
@@ -73,7 +76,7 @@ Cuando caduquen:
 ### En GitHub Actions
 
 - El job `Build and Deploy to EC2` debe terminar en verde
-- En el paso **Deploy to EC2**, revisar que `docker compose ps` muestre 3 servicios `running`
+- En el paso **Deploy to EC2**, revisar que `docker compose ps` muestre 4 servicios `running`
 
 ### En EC2 (SSH manual)
 
@@ -82,12 +85,19 @@ ssh -i dsy2204-1.pem ec2-user@<ELASTIC_IP>
 docker ps
 ```
 
-Debes ver 3 contenedores:
+Debes ver 4 contenedores:
 
 ```
 rabbitmq
+postgres-guias
 empresa-transportista-efs
 empresa-transportista-consumer
+```
+
+Verificar PostgreSQL:
+
+```bash
+docker exec postgres-guias psql -U guias -d guias_db -c "\dt"
 ```
 
 ### Endpoints de prueba
@@ -110,12 +120,13 @@ El workflow valida el fingerprint de `dsy2204-1.pem`:
 
 ### Consumer no arranca
 
-- Verificar `ORACLE_JDBC_URL`, `ORACLE_USER` y `ORACLE_PASSWORD`
-- Ejecutar `Exp3_S8_lisbeth_bilbao_grupo_2_consumer/docs/oracle_guias_s8.sql` en Oracle antes del primer deploy
+- Verificar que `postgres-guias` esté healthy: `docker inspect postgres-guias --format='{{.State.Health.Status}}'`
+- Revisar logs: `docker logs empresa-transportista-consumer`
+- La tabla `guias_despacho_s8` se crea automáticamente al iniciar PostgreSQL por primera vez
 
 ### Producer/Consumer no conectan a RabbitMQ
 
-- Verificar que los 3 contenedores estén en la misma red (`guias-net`)
+- Verificar que los 4 contenedores estén en la misma red (`guias-net`)
 - Revisar logs: `docker logs rabbitmq`
 
 ## Referencias

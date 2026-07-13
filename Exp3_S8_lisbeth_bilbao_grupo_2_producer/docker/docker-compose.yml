@@ -11,6 +11,24 @@ services:
     networks:
       - guias-net
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-guias
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-guias_db}
+      POSTGRES_USER: ${POSTGRES_USER:-guias}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-guias_secret}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../../docker/init/postgres_guias_s8.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-guias} -d ${POSTGRES_DB:-guias_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - guias-net
+
   producer:
     build:
       context: ..
@@ -48,13 +66,16 @@ services:
       EFS_PATH: /app/efs
       AWS_S3_BUCKET: ${AWS_S3_BUCKET:-tu-bucket-guias}
       AWS_REGION: ${AWS_REGION:-us-east-1}
-      ORACLE_JDBC_URL: ${ORACLE_JDBC_URL}
-      ORACLE_USER: ${ORACLE_USER}
-      ORACLE_PASSWORD: ${ORACLE_PASSWORD}
+      DB_JDBC_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-guias_db}
+      DB_USER: ${POSTGRES_USER:-guias}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-guias_secret}
     volumes:
       - efs-data:/app/efs
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     networks:
       - guias-net
 
@@ -64,3 +85,4 @@ networks:
 
 volumes:
   efs-data:
+  postgres-data:

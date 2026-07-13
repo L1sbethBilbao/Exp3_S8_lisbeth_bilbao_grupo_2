@@ -5,7 +5,7 @@ Monorepo Semana 8: arquitectura asíncrona RabbitMQ para guías de despacho.
 | Carpeta | Rol | Puerto |
 |---------|-----|--------|
 | [Exp3_S8_lisbeth_bilbao_grupo_2_producer](Exp3_S8_lisbeth_bilbao_grupo_2_producer/) | Producer — encola operaciones | 8080 |
-| [Exp3_S8_lisbeth_bilbao_grupo_2_consumer](Exp3_S8_lisbeth_bilbao_grupo_2_consumer/) | Consumer — procesa cola, S3, Oracle | 8081 |
+| [Exp3_S8_lisbeth_bilbao_grupo_2_consumer](Exp3_S8_lisbeth_bilbao_grupo_2_consumer/) | Consumer — procesa cola, S3, PostgreSQL | 8081 |
 
 ## Documentación
 

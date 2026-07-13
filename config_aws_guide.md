@@ -1,20 +1,22 @@
 # Guía de configuración — AWS (Semana 8)
 
-Pasos para aprovisionar la infraestructura AWS requerida por la arquitectura Semana 8: **RabbitMQ + Producer + Consumer** en EC2, expuestos por **Elastic IP**, con integración a S3, EFS, API Gateway y Oracle OCI.
+Pasos para aprovisionar la infraestructura AWS requerida por la arquitectura Semana 8: **RabbitMQ + PostgreSQL + Producer + Consumer** en EC2, expuestos por **Elastic IP**, con integración a S3, EFS y API Gateway.
 
 ```
 Postman → Azure IDaaS (token) → API Gateway → Producer :8080
                                               ↓
                                          RabbitMQ :5672
                                               ↓
-                                         Consumer :8081 → S3 + Oracle OCI + EFS
+                                         Consumer :8081 → S3 + PostgreSQL + EFS
+                                                              ↑
+                                                    postgres-guias :5432 (interno)
 ```
 
 ## 1. Instancia EC2
 
 1. AWS Console → **EC2** → **Launch instance**
 2. AMI recomendada: **Amazon Linux 2023**
-3. Tipo: `t2.micro` o superior
+3. Tipo: **`t2.small` recomendado** (2 GB RAM para 4 contenedores). `t2.micro` es ajustado.
 4. Key pair: `dsy2204-1` (la misma que usas en `EC2_SSH_KEY` de GitHub)
 5. Misma VPC/subnet que EFS
 
@@ -39,7 +41,7 @@ Crear o editar el security group de la instancia EC2:
 | 8080 | TCP | 0.0.0.0/0 | Producer (Spring Boot) |
 | 8081 | TCP | 0.0.0.0/0 | Consumer (monitoreo cola/DLQ) |
 
-> Para el video de evaluación, abre 15672 y 5672 para evidenciar RabbitMQ Management UI desde Postman o navegador.
+> **PostgreSQL (5432) NO se expone** al security group. Solo es accesible dentro de la red Docker `guias-net` por el consumer.
 
 ### EFS (security group separado)
 
@@ -134,29 +136,26 @@ El tráfico de Postman entra por **API Gateway** (no directo a EC2 en el flujo d
 Configuración detallada:
 [Exp3_S8_lisbeth_bilbao_grupo_2_producer/docs/AWS_GATEWAY_SETUP.md](Exp3_S8_lisbeth_bilbao_grupo_2_producer/docs/AWS_GATEWAY_SETUP.md)
 
-## 8. Oracle OCI (base de datos externa)
+## 8. PostgreSQL en EC2 (docker-compose)
 
-El consumer persiste guías en Oracle Cloud (OCI).
+PostgreSQL corre como **4to contenedor** dentro de la misma instancia EC2. No requiere OCI ni configuración externa.
 
-### Antes del primer deploy
+| Parámetro | Default | Descripción |
+|-----------|---------|-------------|
+| `POSTGRES_DB` | `guias_db` | Nombre de la base |
+| `POSTGRES_USER` | `guias` | Usuario |
+| `POSTGRES_PASSWORD` | `guias_secret` | Password |
 
-Ejecutar el script SQL en Oracle:
+La tabla `guias_despacho_s8` se crea automáticamente al primer arranque mediante el script en `docker/init/postgres_guias_s8.sql`.
 
+Los datos persisten en el volumen Docker `postgres-data` (sobreviven a redeploys).
+
+### Verificar datos en PostgreSQL
+
+```bash
+docker exec postgres-guias psql -U guias -d guias_db \
+  -c "SELECT id, pedido_id, s3_key, estado FROM guias_despacho_s8;"
 ```
-Exp3_S8_lisbeth_bilbao_grupo_2_consumer/docs/oracle_guias_s8.sql
-```
-
-### Configuración en GitHub Secrets
-
-| Secret | Descripción |
-|--------|-------------|
-| `ORACLE_JDBC_URL` | URL JDBC completa hacia Oracle OCI |
-| `ORACLE_USER` | Usuario de la base |
-| `ORACLE_PASSWORD` | Password |
-
-### Red
-
-Asegurar que la instancia EC2 puede conectarse a Oracle OCI (security lists / ACL en OCI que permitan el tráfico desde la IP elástica de EC2).
 
 ## 9. Despliegue automático (GitHub Actions)
 
@@ -177,9 +176,6 @@ export AWS_S3_BUCKET=cdy2204-1
 export AWS_ACCESS_KEY_ID=...
 export AWS_SECRET_ACCESS_KEY=...
 export AWS_SESSION_TOKEN=...
-export ORACLE_JDBC_URL=jdbc:oracle:thin:@...
-export ORACLE_USER=...
-export ORACLE_PASSWORD=...
 docker compose -f docker-compose.ec2.yml pull
 docker compose -f docker-compose.ec2.yml up -d
 docker ps
@@ -189,7 +185,8 @@ docker ps
 
 ```bash
 # En EC2
-docker ps                                    # 3 contenedores running
+docker ps                                    # 4 contenedores running
+docker exec postgres-guias psql -U guias -d guias_db -c "\dt"
 curl -s http://localhost:15672             # RabbitMQ UI
 curl -s http://localhost:8081/api/cola/estado  # requiere JWT
 
@@ -208,14 +205,14 @@ Microservicio → /app/efs → EC2 /home/ec2-user/efs → Amazon EFS
 ## Checklist pre-video
 
 - [ ] Elastic IP asignada y asociada a EC2
-- [ ] Security group con puertos 22, 5672, 15672, 8080, 8081
+- [ ] Security group con puertos 22, 5672, 15672, 8080, 8081 (sin 5432)
 - [ ] EFS montado en `/home/ec2-user/efs` (`df -h` lo muestra)
 - [ ] Docker y `docker compose` instalados en EC2
 - [ ] Bucket S3 creado y accesible
-- [ ] Oracle: tabla `GUIAS_DESPACHO_S8` creada
-- [ ] 3 contenedores corriendo: `rabbitmq`, producer `:8080`, consumer `:8081`
+- [ ] 4 contenedores corriendo: `rabbitmq`, `postgres-guias`, producer `:8080`, consumer `:8081`
 - [ ] RabbitMQ UI accesible en `http://<ELASTIC_IP>:15672`
 - [ ] `POST .../generar-guia` retorna **202 ENCOLADO**
+- [ ] Filas en `guias_despacho_s8` tras procesamiento consumer
 - [ ] GitHub Actions despliega al hacer push a `main`
 
 ## Referencias

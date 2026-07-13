@@ -44,15 +44,15 @@ Imágenes publicadas:
 | `RABBITMQ_USER` | `guias` | Usuario RabbitMQ (evitar `guest` entre contenedores) |
 | `RABBITMQ_PASS` | `guias_secret` | Password RabbitMQ |
 
-## Oracle OCI (consumer)
+## PostgreSQL (consumer, en EC2 via docker-compose)
 
-| Secret | Descripción |
-|--------|-------------|
-| `ORACLE_JDBC_URL` | `jdbc:oracle:thin:@(description=...)` |
-| `ORACLE_USER` | Usuario BD |
-| `ORACLE_PASSWORD` | Password BD |
+| Secret | Default | Descripción |
+|--------|---------|-------------|
+| `POSTGRES_DB` | `guias_db` | Nombre de la base |
+| `POSTGRES_USER` | `guias` | Usuario PostgreSQL |
+| `POSTGRES_PASSWORD` | `guias_secret` | Password PostgreSQL |
 
-Ejecutar `consumer/docs/oracle_guias_s8.sql` antes del primer deploy.
+La tabla se crea automáticamente con `docker/init/postgres_guias_s8.sql`. No se requieren secrets de Oracle.
 
 ## Repositorios
 
@@ -61,9 +61,9 @@ Monorepo único: [Exp3_S8_lisbeth_bilbao_grupo_2](https://github.com/L1sbethBilb
 | Carpeta | Contenido |
 |---------|-----------|
 | `Exp3_S8_lisbeth_bilbao_grupo_2_producer/` | Producer + Postman + docs |
-| `Exp3_S8_lisbeth_bilbao_grupo_2_consumer/` | Consumer + Oracle SQL |
+| `Exp3_S8_lisbeth_bilbao_grupo_2_consumer/` | Consumer + SQL PostgreSQL |
 
-El workflow `.github/workflows/deploy.yml` en la raíz del monorepo compila y despliega ambos servicios.
+El workflow `.github/workflows/deploy.yml` en la raíz del monorepo compila y despliega ambos servicios + RabbitMQ + PostgreSQL.
 
 ## Cuando caducan credenciales AWS
 

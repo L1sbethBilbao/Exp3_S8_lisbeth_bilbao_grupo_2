@@ -18,47 +18,47 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "GUIAS_DESPACHO_S8")
+@Table(name = "guias_despacho_s8")
 public class GuiaDespachoEntity {
 
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
-	@Column(name = "ID")
+	@Column(name = "id")
 	private Long id;
 
-	@Column(name = "MESSAGE_ID", nullable = false, unique = true, length = 36)
+	@Column(name = "message_id", nullable = false, unique = true, length = 36)
 	private String messageId;
 
-	@Column(name = "TIPO_OPERACION", nullable = false, length = 20)
+	@Column(name = "tipo_operacion", nullable = false, length = 20)
 	private String tipoOperacion;
 
-	@Column(name = "PEDIDO_ID", length = 20)
+	@Column(name = "pedido_id", length = 20)
 	private String pedidoId;
 
-	@Column(name = "CLIENTE", length = 100)
+	@Column(name = "cliente", length = 100)
 	private String cliente;
 
-	@Column(name = "DIRECCION", length = 200)
+	@Column(name = "direccion", length = 200)
 	private String direccion;
 
-	@Column(name = "DESCRIPCION", length = 500)
+	@Column(name = "descripcion", length = 500)
 	private String descripcion;
 
-	@Column(name = "TRANSPORTISTA", length = 100)
+	@Column(name = "transportista", length = 100)
 	private String transportista;
 
-	@Column(name = "FECHA", length = 20)
+	@Column(name = "fecha", length = 20)
 	private String fecha;
 
-	@Column(name = "S3_KEY", length = 300)
+	@Column(name = "s3_key", length = 300)
 	private String s3Key;
 
-	@Column(name = "NOMBRE_GUIA", length = 100)
+	@Column(name = "nombre_guia", length = 100)
 	private String nombreGuia;
 
-	@Column(name = "ESTADO", nullable = false, length = 20)
+	@Column(name = "estado", nullable = false, length = 20)
 	private String estado;
 
-	@Column(name = "FECHA_REGISTRO", nullable = false)
+	@Column(name = "fecha_registro", nullable = false)
 	private LocalDateTime fechaRegistro;
 }

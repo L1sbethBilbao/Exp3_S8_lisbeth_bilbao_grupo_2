@@ -89,9 +89,9 @@ jobs:
           EFS_PATH: ${{ secrets.EFS_PATH }}
           RABBITMQ_USER: ${{ secrets.RABBITMQ_USER }}
           RABBITMQ_PASS: ${{ secrets.RABBITMQ_PASS }}
-          ORACLE_JDBC_URL: ${{ secrets.ORACLE_JDBC_URL }}
-          ORACLE_USER: ${{ secrets.ORACLE_USER }}
-          ORACLE_PASSWORD: ${{ secrets.ORACLE_PASSWORD }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
           EC2_HOST="$(echo "$EC2_HOST" | tr -d '[:space:]')"
           USER_SERVER="$(echo "$USER_SERVER" | tr -d '[:space:]')"
@@ -100,6 +100,9 @@ jobs:
           EFS_PATH="$(echo "${EFS_PATH:-/app/efs}" | tr -d '[:space:]')"
           RABBITMQ_USER="$(echo "${RABBITMQ_USER:-guias}" | tr -d '[:space:]')"
           RABBITMQ_PASS="${RABBITMQ_PASS:-guias_secret}"
+          POSTGRES_DB="$(echo "${POSTGRES_DB:-guias_db}" | tr -d '[:space:]')"
+          POSTGRES_USER="$(echo "${POSTGRES_USER:-guias}" | tr -d '[:space:]')"
+          POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-guias_secret}"
           SSH_BASE=(ssh -i ~/.ssh/ec2_deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
           SCP_BASE=(scp -i ~/.ssh/ec2_deploy_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
           TARGET="${USER_SERVER}@${EC2_HOST}"
@@ -108,7 +111,9 @@ jobs:
           "${SSH_BASE[@]}" "$TARGET" "mkdir -p ~/app-s8 && sudo mkdir -p '${EFS_MOUNT_PATH}'"
           "${SSH_BASE[@]}" "$TARGET" "df -h | grep -E 'efs|${EFS_MOUNT_PATH}' || echo 'Verificar que EFS este montado en ${EFS_MOUNT_PATH}'"
 
+          "${SSH_BASE[@]}" "$TARGET" "mkdir -p ~/app-s8/init"
           "${SCP_BASE[@]}" docker/docker-compose.ec2.yml "${TARGET}:~/app-s8/docker-compose.ec2.yml"
+          "${SCP_BASE[@]}" docker/init/postgres_guias_s8.sql "${TARGET}:~/app-s8/init/postgres_guias_s8.sql"
 
           {
             echo "DOCKERHUB_USERNAME=${DOCKERHUB_USERNAME}"
@@ -120,9 +125,9 @@ jobs:
             echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}"
             echo "AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}"
             echo "EFS_MOUNT_PATH=${EFS_MOUNT_PATH}"
-            echo "ORACLE_JDBC_URL=${ORACLE_JDBC_URL}"
-            echo "ORACLE_USER=${ORACLE_USER}"
-            echo "ORACLE_PASSWORD=${ORACLE_PASSWORD}"
+            echo "POSTGRES_DB=${POSTGRES_DB}"
+            echo "POSTGRES_USER=${POSTGRES_USER}"
+            echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
           } > /tmp/deploy.env
           "${SCP_BASE[@]}" /tmp/deploy.env "${TARGET}:~/app-s8/.env"
           rm -f /tmp/deploy.env
