@@ -9,11 +9,14 @@ import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.support.converter.DefaultJackson2JavaTypeMapper;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.amqp.rabbit.annotation.EnableRabbit;
 import org.springframework.context.annotation.Configuration;
+
+import com.duoc.empresa_transportista_consumer.dto.GuiaOperacionMensaje;
 
 @Configuration
 @EnableRabbit
@@ -39,7 +42,22 @@ public class RabbitMQConfig {
 
 	@Bean
 	Jackson2JsonMessageConverter messageConverter() {
-		return new Jackson2JsonMessageConverter();
+		Jackson2JsonMessageConverter converter = new Jackson2JsonMessageConverter();
+		DefaultJackson2JavaTypeMapper typeMapper = new DefaultJackson2JavaTypeMapper();
+		// Producer publica __TypeId__ del paquete efs; el consumer debe mapearlo a su DTO local.
+		Map<String, Class<?>> idClassMapping = new HashMap<>();
+		idClassMapping.put(
+				"com.duoc.empresa_transportista_efs.dto.GuiaOperacionMensaje",
+				GuiaOperacionMensaje.class);
+		idClassMapping.put(
+				"com.duoc.empresa_transportista_consumer.dto.GuiaOperacionMensaje",
+				GuiaOperacionMensaje.class);
+		typeMapper.setIdClassMapping(idClassMapping);
+		typeMapper.addTrustedPackages(
+				"com.duoc.empresa_transportista_efs.dto",
+				"com.duoc.empresa_transportista_consumer.dto");
+		converter.setJavaTypeMapper(typeMapper);
+		return converter;
 	}
 
 	@Bean
